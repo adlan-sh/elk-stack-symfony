@@ -1,0 +1,113 @@
+services:
+
+  app:
+    container_name: ${INFRA_APP_CONTAINER_NAME}
+    build:
+      context: .
+      dockerfile: ./docker/app/Dockerfile
+      target: app-dev
+      args:
+        APP_BASE_DIR: ${INFRA_APP_BASE_DIR}
+        BASE_PHP_IMAGE_TAG: ${BASE_PHP_IMAGE_TAG}
+        COMPOSER_AUTH: "{}"
+    ports:
+      - ${INFRA_APP_PORT-8080}:${APP_APP_PORT-8080}
+      - "9001:9001"
+    volumes:
+      - ${APP_BASE_DIR-./app}:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  database:
+    container_name: ${INFRA_DATABASE_CONTAINER_NAME}
+    image: postgres:${INFRA_DATABASE_POSTGRES_VERSION}
+    environment:
+      POSTGRES_DB: ${APP_DATABASE_NAME}
+      POSTGRES_USER: ${APP_DATABASE_USER}
+      POSTGRES_PASSWORD: ${APP_DATABASE_SECRET}
+      PGDATA: /data/postgres
+      TZ: 'Europe/Moscow'
+      PGTZ: 'Europe/Moscow'
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./var/pgbackup:/backup
+    ports:
+      - ${INFRA_DATABASE_PORT-5432}:${APP_DATABASE_PORT-5432}
+    restart: unless-stopped
+
+  elasticsearch:
+    image: elasticsearch:7.16.1
+    container_name: elasticsearch
+    ports:
+      - ${INFRA_ES_PORT-9200}:${APP_ES_PORT-9200}
+    environment:
+      - cluster.name=ocker-cluster
+      - bootstrap.memory_lock=true
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - ELASTIC_USERNAME=${ES_USERNAME}
+      - ELASTIC_PASSWORD=${ES_PASSWORD}
+    volumes:
+      - ./app/config/elk/elasticsearch/config.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+    networks:
+      - elk
+
+  kibana:
+    image: kibana:7.16.1
+    restart: always
+    container_name: kibana
+    ports:
+      - ${KIBANA_PORT-5601}:${KIBANA_PORT-5601}
+    depends_on:
+      - elasticsearch
+    environment:
+      - ELASTICSEARCH_URL=https://elasticsearch:9200
+      - SERVER_NAME=kibana
+      - PATH_DATA=/usr/share/kibana/data
+    volumes:
+      - ./app/config/elk/kibana/config.yml:/usr/share/kibana/config/kibana.yml:ro
+    networks:
+      - elk
+
+  logstash:
+    image: logstash:7.16.1
+    container_name: logstash
+    restart: always
+    ports:
+      - ${LOGSTASH_PORT-5044}:${LOGSTASH_PORT-5044}
+    environment:
+      - NODE_NAME=logstash
+      - xpack.monitoring.enabled=false
+    volumes:
+      - ./app/config/elk/logstash/config.yml:/usr/share/logstash/config/config.yml:ro
+      - ./app/config/elk/logstash/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ./app/config/elk/logstash/pipelines:/usr/share/logstash/config/pipelines:ro
+    links:
+      - elasticsearch
+    depends_on:
+      - elasticsearch
+    networks:
+      - elk
+
+  filebeat:
+    image: elastic/filebeat:7.16.2
+    container_name: filebeat
+    entrypoint: "filebeat -e -strict.perms=false"
+    volumes:
+      - ./app/config/elk/filebeat/config.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./app/var/log/:/app_log/:ro
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+volumes:
+  database:
+  esdata:
+
+networks:
+  elk:
+    driver: bridge

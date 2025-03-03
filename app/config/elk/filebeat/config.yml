@@ -1,0 +1,11 @@
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /app_log/logstash-dev.log
+    fields:
+      # Название нашего сервиса
+      service: host_metrics_app
+
+output.logstash:
+  hosts: ["logstash:5044"]
